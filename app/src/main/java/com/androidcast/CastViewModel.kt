@@ -1,9 +1,25 @@
 package com.androidcast
 
 import android.net.Uri
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
+import androidx.mediarouter.media.MediaControlIntent
+import androidx.mediarouter.media.MediaRouteSelector
+import androidx.mediarouter.media.MediaRouter
+import com.google.android.gms.cast.MediaInfo
+import com.google.android.gms.cast.MediaLoadRequestData
+import com.google.android.gms.cast.MediaMetadata
+import com.google.android.gms.cast.MediaSeekOptions
+import com.google.android.gms.cast.framework.CastContext
+import com.google.android.gms.cast.framework.CastState
+import com.google.android.gms.cast.framework.CastStateListener
+import com.google.android.gms.cast.framework.SessionManager
+import com.google.android.gms.cast.framework.media.RemoteMediaClient
 import com.samsung.multiscreen.Error
 import com.samsung.multiscreen.Player
 import com.samsung.multiscreen.Search
@@ -13,127 +29,211 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-sealed class CastState {
-    data class CONNECTING(val service: Service, val connected: Boolean): CastState()
-    object SEARCHING: CastState()
+enum class CastDeviceState {
+    SEARCHING,
+    CONNECTING,
+    CONNECTED
+
 }
 
-sealed class PlayerState {
-    object IDLE: PlayerState()
-    object READY: PlayerState()
-    object BUFFERING: PlayerState()
+enum class PlayerState {
+    IDLE,
+    READY,
+    BUFFERING
 }
 
-class CastViewModel(private val search: Search) : ViewModel() {
+open class Device(val id: String, val name: String?, val description: String?, val enable: Boolean)
+data class SamsungDevice(val service: Service) :
+    Device(
+        service.id,
+        service.name,
+        service.type+ " - " + service.version,
+        !service.isStandbyService
+    )
+data class ChromeCastDevice(val route: MediaRouter.RouteInfo) :
+    Device(
+        route.id,
+        route.name,
+        route.description,
+        route.isEnabled
+    )
 
-    val serviceState = mutableStateOf<CastState>(CastState.SEARCHING)
-    val serviceList = mutableStateListOf<Service>()
+class CastViewModel(private val search: Search, private val castContext: CastContext, private var mediaRouter: MediaRouter) : ViewModel() {
 
-    val playerState = mutableStateOf<PlayerState>(PlayerState.IDLE)
-    val videoPlayer = mutableStateOf<VideoPlayer?>(null)
+    private var urlToPlay by mutableStateOf("")
 
-    val playWhenReady = mutableStateOf(true)
+    var deviceState by mutableStateOf(CastDeviceState.SEARCHING)
+    val deviceList = mutableStateListOf<Device>()
+    var currentDevice by mutableStateOf<Device?>(null)
 
-    val duration = mutableStateOf(0)
-    val currentTime = mutableStateOf(0)
-    val progress = mutableStateOf(0f)
+    var playerState by mutableStateOf(PlayerState.IDLE)
+
+    var isPlaying by mutableStateOf(true)
+
+    val duration = mutableIntStateOf(0)
+    val currentTime = mutableIntStateOf(0)
+    val progress = mutableFloatStateOf(0f)
+
+    private var videoPlayer by mutableStateOf<VideoPlayer?>(null)
+    private var remoteMediaClient by mutableStateOf<RemoteMediaClient?>(null)
 
     init {
 
         search.setOnServiceFoundListener(serviceFound())
         search.setOnServiceLostListener(serviceLost())
 
-        search.start()
+        castContext.addCastStateListener(castStateListener())
+
+        //search.start()
+
+        startSearch()
     }
 
     private fun serviceFound() = Search.OnServiceFoundListener { service ->
         println(service.name)
 
-        if (!serviceList.any { it.id == service.id } && !service.isStandbyService)
-            serviceList.add(service)
+        if (!deviceList.any { it.id == service.id } && !service.isStandbyService)
+            deviceList.add(SamsungDevice(service = service))
     }
 
     private fun serviceLost() = Search.OnServiceLostListener { service ->
         println(service.name)
 
-        val servById = serviceList.find { it.id == service.id }
-        serviceList.remove(servById)
+        val deviceById = deviceList.find { it.id == service.id }
+        deviceList.remove(deviceById)
     }
 
     fun startSearch(){
         search.start()
-        serviceState.value = CastState.SEARCHING
+
+        val selector = MediaRouteSelector.Builder()
+            // These are the framework-supported intents
+            //.addControlCategory(MediaControlIntent.CATEGORY_LIVE_AUDIO)
+            //.addControlCategory(MediaControlIntent.CATEGORY_LIVE_VIDEO)
+            .addControlCategory(MediaControlIntent.CATEGORY_REMOTE_PLAYBACK)
+            .build()
+
+        mediaRouter.addCallback(selector, mediaRouterCallBack(), MediaRouter.CALLBACK_FLAG_PERFORM_ACTIVE_SCAN)
+
+
+        deviceState = CastDeviceState.SEARCHING
     }
 
     fun stopSearch(){
         search.stop()
+
+        mediaRouter.removeCallback(mediaRouterCallBack())
     }
 
-    fun connect(url: String, service: Service) {
+    fun connect(url: String, device: Device) {
+        urlToPlay = url
+        currentDevice = device
 
-        serviceState.value = CastState.CONNECTING(service, false)
+        deviceState = CastDeviceState.CONNECTING
         stopSearch()
 
-        videoPlayer.value = service.createVideoPlayer("AndroidCast")
-        videoPlayer.value?.addOnMessageListener(videoPlayerListener())
-        videoPlayer.value?.playContent(Uri.parse(url), "AndroidCast", Uri.parse(""), object : com.samsung.multiscreen.Result<Boolean> {
-            override fun onSuccess(p0: Boolean?) {
-                //result(true, null)
-                serviceState.value = CastState.CONNECTING(service, true)
-            }
+        when(device) {
+            is SamsungDevice -> {
+                videoPlayer = device.service.createVideoPlayer("AndroidCast")
+                videoPlayer?.addOnMessageListener(videoPlayerListener())
+                videoPlayer?.playContent(Uri.parse(urlToPlay), "AndroidCast", Uri.parse(""), object : com.samsung.multiscreen.Result<Boolean> {
+                    override fun onSuccess(p0: Boolean?) {
+                        //result(true, null)
+                        deviceState = CastDeviceState.CONNECTED
+                    }
 
-            override fun onError(p0: Error?) {
-                startSearch()
-            }
+                    override fun onError(p0: Error?) {
+                        startSearch()
+                    }
 
-        })
+                })
+            }
+            is ChromeCastDevice -> {
+                mediaRouter.selectRoute(device.route)
+            }
+        }
+
 
     }
 
-    fun play(){
-        videoPlayer.value?.play()
+    fun play() {
+        videoPlayer?.play()
+        remoteMediaClient?.play()
     }
 
     fun pause(){
-        videoPlayer.value?.pause()
+        videoPlayer?.pause()
+        remoteMediaClient?.pause()
     }
 
     fun rewind(){
-        videoPlayer.value?.rewind()
+        videoPlayer?.rewind()
+
+        remoteMediaClient?.let {
+            val rewindTime = it.approximateStreamPosition - 10000
+            val mso = MediaSeekOptions.Builder().setPosition(rewindTime).build()
+            it.seek(mso)
+        }
     }
 
     fun forward(){
-        videoPlayer.value?.forward()
+        videoPlayer?.forward()
+
+        remoteMediaClient?.let {
+            val forwardTime = it.approximateStreamPosition + 10000
+            val mso = MediaSeekOptions.Builder().setPosition(forwardTime).build()
+            it.seek(mso)
+        }
     }
 
     fun seek(time: Int){
-        videoPlayer.value?.seekTo(time, TimeUnit.MILLISECONDS)
+        videoPlayer?.seekTo(time, TimeUnit.MILLISECONDS)
+
+        remoteMediaClient?.let {
+            val mso = MediaSeekOptions.Builder().setPosition(time.toLong()).build()
+            it.seek(mso)
+        }
     }
 
     fun stop(){
-        videoPlayer.value?.stop()
-        videoPlayer.value?.disconnect()
+        videoPlayer?.stop()
+        videoPlayer?.disconnect()
+
+        remoteMediaClient?.stop()
+        mediaRouter.unselect(MediaRouter.UNSELECT_REASON_STOPPED)
 
         startSearch()
 
-        videoPlayer.value = null
+        resetAll()
+    }
+
+    private fun resetAll() {
+        videoPlayer = null
+        remoteMediaClient= null
+
+        playerState = PlayerState.IDLE
+        isPlaying = false
+
+        duration.intValue = 0
+        currentTime.intValue = 0
+        progress.floatValue = 0f
     }
 
     fun disconnect(){
-        videoPlayer.value?.disconnect()
+        videoPlayer?.disconnect()
     }
 
     private fun videoPlayerListener() = object : VideoPlayer.OnVideoPlayerListener {
         override fun onBufferingStart() {
             println("onBufferingStart")
             //onBuffering(true)
-            playerState.value = PlayerState.BUFFERING
+            playerState = PlayerState.BUFFERING
 
         }
 
         override fun onBufferingComplete() {
             println("onBufferingComplete")
-            playerState.value = PlayerState.READY
+            playerState = PlayerState.READY
             /*if (playWhenReady.value) {
                 play()
             } else {
@@ -146,30 +246,30 @@ class CastViewModel(private val search: Search) : ViewModel() {
 
         override fun onCurrentPlayTime(currentProgress: Int) {
             println("onCurrentPlayTime")
-            if (currentTime.value != currentProgress) {
-                currentTime.value = currentProgress
+            if (currentTime.intValue != currentProgress) {
+                currentTime.intValue = currentProgress
 
                 if (currentProgress > 0) {
 
                     val current = currentProgress.toFloat()
-                    val dur = duration.value.toFloat()
+                    val dur = duration.intValue.toFloat()
 
                     println((current / dur) * 100)
 
-                    progress.value = (current / dur)
+                    progress.floatValue = (current / dur)
                 }
             }
         }
 
         override fun onStreamingStarted(dur: Int) {
             println("onStreamingStarted $dur")
-            duration.value = dur
-            playerState.value = PlayerState.READY
+            duration.intValue = dur
+            playerState = PlayerState.READY
         }
 
         override fun onStreamCompleted() {
             println("onStreamingStarted")
-            videoPlayer.value?.stop()
+            videoPlayer?.stop()
         }
 
         override fun onPlayerInitialized() {
@@ -182,17 +282,17 @@ class CastViewModel(private val search: Search) : ViewModel() {
 
         override fun onPlay() {
             println("onPlay")
-            playWhenReady.value = true
+            isPlaying = true
         }
 
         override fun onPause() {
             println("onPause")
-            playWhenReady.value = false
+            isPlaying = false
         }
 
         override fun onStop() {
             println("onStop")
-            playWhenReady.value = false
+            isPlaying = false
         }
 
         override fun onForward() {
@@ -248,4 +348,107 @@ class CastViewModel(private val search: Search) : ViewModel() {
 
     }
 
+    /**
+     * Chromecast
+     */
+
+    private fun castStateListener() = CastStateListener {
+        when(it) {
+            CastState.CONNECTED -> {
+                deviceState = CastDeviceState.CONNECTED
+
+                val castSession = castContext.sessionManager.currentCastSession
+
+                remoteMediaClient = castSession?.remoteMediaClient
+                remoteMediaClient?.stop()
+
+                remoteMediaClient?.registerCallback(mediaClientCallback())
+
+                val videoMetadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_MOVIE).apply {
+                    putString(MediaMetadata.KEY_TITLE, urlToPlay)
+                }
+
+                val mediaInfo = MediaInfo.Builder(urlToPlay)
+                    .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
+                    .setMetadata(videoMetadata)
+
+
+                val mediaLoadRequestData = MediaLoadRequestData.Builder()
+                    .setMediaInfo(mediaInfo.build())
+                    .setAutoplay(true)
+
+                remoteMediaClient?.load(mediaLoadRequestData.build())
+
+                stopSearch()
+            }
+            CastState.NOT_CONNECTED -> {
+                remoteMediaClient?.unregisterCallback(mediaClientCallback())
+                remoteMediaClient = null
+                startSearch()
+            }
+        }
+    }
+    private fun mediaRouterCallBack() =  object: MediaRouter.Callback() {
+        override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) {
+            if (!deviceList.any { it.id == route.id } && route.isEnabled)
+                deviceList.add(ChromeCastDevice(route = route))
+        }
+
+        override fun onRouteRemoved(router: MediaRouter, route: MediaRouter.RouteInfo) {
+            val deviceById = deviceList.find { it.id == route.id }
+            deviceList.remove(deviceById)
+        }
+
+        /*override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
+            val old = deviceList.find { it.id == route.id }
+            deviceList[deviceList.indexOf(old)] = ChromeCastDevice(route = route)
+        }*/
+
+        /*override fun onRouteSelected(
+            router: MediaRouter,
+            selectedRoute: MediaRouter.RouteInfo,
+            reason: Int,
+            requestedRoute: MediaRouter.RouteInfo
+        ) {
+            mediaRouter = router
+
+        }
+
+        override fun onRouteUnselected(
+            router: MediaRouter,
+            route: MediaRouter.RouteInfo,
+            reason: Int
+        ) {
+            super.onRouteUnselected(router, route, reason)
+        }*/
+    }
+
+    private fun mediaClientCallback() = object: RemoteMediaClient.Callback() {
+        override fun onStatusUpdated() {
+            if (remoteMediaClient == null) return
+
+            remoteMediaClient?.let {
+                isPlaying = it.isPlaying
+
+                playerState = if (it.isBuffering) PlayerState.BUFFERING else PlayerState.READY
+
+                it.streamDuration
+                it.addProgressListener({ position, duration ->
+
+                    if (duration <= 0) return@addProgressListener
+
+                    this@CastViewModel.duration.intValue = duration.toInt()
+                    this@CastViewModel.currentTime.intValue = position.toInt()
+
+                    if (position > 0) {
+                        val current = position.toFloat()
+                        val dur = duration.toFloat()
+                        progress.floatValue = (current / dur)
+                    }
+                }, 500)
+
+                Unit
+            }
+        }
+    }
 }

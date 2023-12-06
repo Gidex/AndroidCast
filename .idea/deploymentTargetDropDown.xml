@@ -2,21 +2,27 @@
 <project version="4">
   <component name="deploymentTargetDropDown">
     <value>
-      <entry key="app">
+      <entry key="AlgoPreview">
+        <State />
+      </entry>
+      <entry key="TestPreview">
         <State>
-          <targetSelectedWithDropDown>
+          <runningDeviceTargetSelectedWithDropDown>
             <Target>
-              <type value="QUICK_BOOT_TARGET" />
+              <type value="RUNNING_DEVICE_TARGET" />
               <deviceKey>
                 <Key>
-                  <type value="VIRTUAL_DEVICE_PATH" />
-                  <value value="C:\Users\Gidex\.android\avd\Resizable_Experimental_API_34.avd" />
+                  <type value="SERIAL_NUMBER" />
+                  <value value="RXCT4030TCF" />
                 </Key>
               </deviceKey>
             </Target>
-          </targetSelectedWithDropDown>
-          <timeTargetWasSelectedWithDropDown value="2023-12-05T00:54:43.839317600Z" />
+          </runningDeviceTargetSelectedWithDropDown>
+          <timeTargetWasSelectedWithDropDown value="2023-12-05T03:51:56.463561900Z" />
         </State>
+      </entry>
+      <entry key="app">
+        <State />
       </entry>
     </value>
   </component>

@@ -9,7 +9,9 @@ AndroidCast is an Android app built using Kotlin and Jetpack Compose that allows
 The following devices and platforms are currently supported:
 
 - Samsung TVs (Smart View SDK)
-- Chromecast (coming soon)
+- Chromecast (Google Cast SDK)
+
+Video URL used in testing: https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4
 
 ## Contributing
 
