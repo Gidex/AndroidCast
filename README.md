@@ -11,7 +11,8 @@ The following devices and platforms are currently supported:
 - Samsung TVs (Smart View SDK)
 - Chromecast (Google Cast SDK)
 
-Video URL used in testing: https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4
+Video URL used in testing:
+https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4
 
 ## Contributing
 
